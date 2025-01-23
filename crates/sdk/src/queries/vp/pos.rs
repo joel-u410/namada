@@ -904,7 +904,9 @@ fn enrich_bonds_and_unbonds(
 mod test {
     use super::*;
     use crate::queries::testing::TestClient;
-    use crate::queries::{RequestCtx, RequestQuery, Router};
+    use crate::queries::{RequestCtx, RequestQuery, Router, RPC};
+    use namada_core::chain::Epoch;
+    use namada_core::token;
     use namada_core::{address, storage};
     use namada_state::StorageWrite;
 
@@ -939,64 +941,120 @@ mod test {
             .contains("Invalid Tendermint address"))
     }
 
+    // Helpers for test_rewards_query
+    mod helpers {
+        use super::*;
+
+        pub fn init_validator<RPC: Router>(
+            client: &mut TestClient<RPC>,
+        ) -> (Address, namada_proof_of_stake::PosParams) {
+            let genesis_validator =
+                namada_proof_of_stake::test_utils::get_dummy_genesis_validator(
+                );
+            let validator_address = genesis_validator.address.clone();
+
+            let params =
+                namada_proof_of_stake::test_utils::test_init_genesis::<
+                    _,
+                    namada_parameters::Store<_>,
+                    governance::Store<_>,
+                    namada_trans_token::Store<_>,
+                >(
+                    &mut client.state,
+                    namada_proof_of_stake::OwnedPosParams::default(),
+                    std::iter::once(genesis_validator),
+                    Epoch(0),
+                )
+                .expect("Test initialization failed");
+
+            (validator_address, params)
+        }
+
+        pub fn setup_delegator<RPC: Router>(
+            client: &mut TestClient<RPC>,
+            validator_address: &Address,
+            bond_amount: token::Amount,
+        ) -> Address {
+            let delegator = address::testing::established_address_2();
+
+            // Credit tokens to delegator
+            let native_token = client.state.get_native_token().unwrap();
+            StorageWrite::write(
+                &mut client.state,
+                &storage::Key::from(
+                    namada_trans_token::storage_key::balance_key(
+                        &native_token,
+                        &delegator,
+                    ),
+                ),
+                bond_amount,
+            )
+            .expect("Credit tokens failed");
+
+            // Bond tokens from delegator to validator
+            namada_proof_of_stake::bond_tokens::<
+                _,
+                governance::Store<_>,
+                namada_trans_token::Store<_>,
+            >(
+                &mut client.state,
+                Some(&delegator),
+                validator_address,
+                bond_amount,
+                Epoch(1),
+                Some(0),
+            )
+            .expect("Bonding tokens failed");
+
+            delegator
+        }
+
+        pub fn advance_epoch<RPC: Router>(
+            client: &mut TestClient<RPC>,
+        ) -> Epoch {
+            let current_epoch = client.state.in_mem().last_epoch;
+            let next_epoch = current_epoch.next();
+            let height = client.state.in_mem().block.height;
+
+            // Update block epoch and predecessor epochs
+            client.state.in_mem_mut().block.epoch = next_epoch;
+            client
+                .state
+                .in_mem_mut()
+                .block
+                .pred_epochs
+                .new_epoch(height);
+            client.state.commit_block().expect("Test failed");
+
+            // Advance block height and update predecessor epochs again
+            client.state.in_mem_mut().block.height += 1;
+            client
+                .state
+                .in_mem_mut()
+                .block
+                .pred_epochs
+                .new_epoch(height);
+            client.state.commit_block().expect("Test failed");
+
+            next_epoch
+        }
+    }
+
     #[tokio::test]
     async fn test_rewards_query() {
-        use crate::queries::RPC;
-        use namada_core::chain::Epoch;
-        use namada_core::token;
-
         // Initialize test client
         let mut client = TestClient::new(RPC);
 
         // Set up validator
-        let genesis_validator =
-            namada_proof_of_stake::test_utils::get_dummy_genesis_validator();
-        let validator_address = genesis_validator.address.clone();
-
-        // Initialize genesis state
-        let _params = namada_proof_of_stake::test_utils::test_init_genesis::<
-            _,
-            namada_parameters::Store<_>,
-            governance::Store<_>,
-            namada_trans_token::Store<_>,
-        >(
-            &mut client.state,
-            namada_proof_of_stake::OwnedPosParams::default(),
-            std::iter::once(genesis_validator),
-            Epoch(0),
-        )
-        .expect("Test initialization failed");
+        let (validator_address, _params) = helpers::init_validator(&mut client);
 
         // Set up delegator
-        let delegator = address::testing::established_address_2();
         let bond_amount = token::Amount::native_whole(100);
-
-        // Credit tokens to delegator
-        let native_token = client.state.get_native_token().unwrap();
-        StorageWrite::write(
-            &mut client.state,
-            &storage::Key::from(namada_trans_token::storage_key::balance_key(
-                &native_token,
-                &delegator,
-            )),
-            bond_amount,
-        )
-        .expect("Credit tokens failed");
-
-        // Bond tokens from delegator to validator
-        namada_proof_of_stake::bond_tokens::<
-            _,
-            governance::Store<_>,
-            namada_trans_token::Store<_>,
-        >(
-            &mut client.state,
-            Some(&delegator),
+        let delegator = helpers::setup_delegator(
+            &mut client,
             &validator_address,
             bond_amount,
-            Epoch(1),
-            Some(0),
-        )
-        .expect("Bonding tokens failed");
+        );
 
         // Add some rewards
         let rewards_amount = token::Amount::native_whole(10);
@@ -1035,32 +1093,9 @@ mod test {
             .expect("Rewards query failed");
         assert_eq!(result, rewards_amount);
 
-        let epoch = Epoch(0);
-        assert_eq!(client.state.in_mem().last_epoch, epoch);
-
-        // Advance epoch
-        let epoch = epoch.next();
-        let height = client.state.in_mem().block.height;
-        client.state.in_mem_mut().block.epoch = epoch;
-        client
-            .state
-            .in_mem_mut()
-            .block
-            .pred_epochs
-            .new_epoch(height);
-        client.state.commit_block().expect("Test failed");
-        assert_eq!(client.state.in_mem().last_epoch, epoch);
-
-        // Commit a block to make the epoch change visible in queries
-        client.state.in_mem_mut().block.height += 1;
-        client
-            .state
-            .in_mem_mut()
-            .block
-            .pred_epochs
-            .new_epoch(height);
-        client.state.commit_block().expect("Test failed");
-        assert_eq!(client.state.in_mem().last_epoch, epoch);
+        // Advance to next epoch
+        let epoch = helpers::advance_epoch(&mut client);
+        assert_eq!(epoch, Epoch(1));
 
         // Test querying rewards at specific epoch
         let result = RPC
@@ -1070,7 +1105,7 @@ mod test {
                 &client,
                 &validator_address,
                 &Some(delegator),
-                &Some(Epoch(1)),
+                &Some(epoch),
             )
             .await
             .expect("Rewards query failed");
