@@ -575,7 +575,7 @@ impl<U: WalletIo> Wallet<U> {
         alias: String,
         alias_force: bool,
         birthday: Option<BlockHeight>,
-        ledger_zip32: bool,
+        unsafe_pure_zip32: bool,
         derivation_path: DerivationPath,
         mnemonic_passphrase: Option<(Mnemonic, Zeroizing<String>)>,
         prompt_bip39_passphrase: bool,
@@ -594,7 +594,9 @@ impl<U: WalletIo> Wallet<U> {
                 (mnemonic, passphrase)
             };
         let seed = Seed::new(&mnemonic, &passphrase);
-        let seed = if ledger_zip32 {
+        let seed = if unsafe_pure_zip32 {
+            seed.as_bytes()
+        } else {
             // Path to obtain the ZIP32 seed
             let zip32_seed_path =
                 DerivationPath::default_for_transparent_scheme(
@@ -610,8 +612,6 @@ impl<U: WalletIo> Wallet<U> {
             .expect("Expected Ed25519 key")
             .0
             .to_bytes()[..]
-        } else {
-            seed.as_bytes()
         };
         // Now ZIP32 derive the extended spending key from the new seed
         let spend_key = derive_hd_spending_key(seed, derivation_path.clone());
@@ -646,6 +646,11 @@ impl<U: WalletIo> Wallet<U> {
     /// provided, will prompt for password from stdin.
     /// Stores the key in decrypted key cache and returns the alias of the key
     /// and a reference-counting pointer to the key.
+    ///
+    /// Any usage of this function should be careful not expose a shielded key
+    /// that may be derived via modified ZIP32 from this key (specifically when
+    /// the scheme is Ed25519 with the default HD derivation path and no
+    /// encryption password is being used).
     #[allow(clippy::too_many_arguments)]
     pub fn derive_store_key_from_mnemonic_code(
         &mut self,
@@ -773,6 +778,11 @@ impl<U: WalletIo> Wallet<U> {
     /// without encryption.
     /// Stores the key in decrypted key cache and returns the alias of the key
     /// and the key itself.
+    ///
+    /// Any usage of this function should be careful not expose a shielded key
+    /// that may be derived via modified ZIP32 from this key (specifically when
+    /// the scheme is Ed25519 with the default HD derivation path and no
+    /// encryption password is being used).
     pub fn derive_store_hd_secret_key(
         &mut self,
         scheme: SchemeType,

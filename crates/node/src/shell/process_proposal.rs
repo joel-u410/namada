@@ -437,7 +437,7 @@ where
                         };
                     }
                 };
-                let mut tx_gas_meter = TxGasMeter::new(gas_limit);
+                let mut tx_gas_meter = TxGasMeter::new(gas_limit, gas_scale);
                 if tx_gas_meter.add_wrapper_gas(tx_bytes).is_err() {
                     return TxResult {
                         code: ResultCode::TxGasLimit.into(),
@@ -474,6 +474,17 @@ where
                             "Tx carries a wrong chain id: expected {}, found \
                              {}",
                             self.chain_id, tx_chain_id
+                        ),
+                    };
+                }
+
+                // Tx section count check
+                if tx.sections.len() > MAX_TX_SECTIONS_LEN {
+                    return TxResult {
+                        code: ResultCode::InvalidTx.into(),
+                        info: format!(
+                            "Tx contains more than {MAX_TX_SECTIONS_LEN} \
+                             sections."
                         ),
                     };
                 }
@@ -602,8 +613,8 @@ mod test_process_proposal {
     use namada_vote_ext::{
         bridge_pool_roots, ethereum_events, validator_set_update,
     };
+    use proptest::prop_assert;
     use proptest::test_runner::{Config, TestCaseError, TestRunner};
-    use proptest::{prop_assert, prop_assert_eq};
 
     use super::*;
     use crate::shell::test_utils::{
@@ -935,8 +946,8 @@ mod test_process_proposal {
         assert_eq!(
             response.result.info,
             String::from(
-                "WrapperTx signature verification failed: The wrapper \
-                 signature is invalid."
+                "WrapperTx signature verification failed: The section \
+                 signature is invalid: signature threshold not met: (0 < 1)"
             )
         );
     }
@@ -975,18 +986,11 @@ mod test_process_proposal {
                     } else {
                         return Err(TestCaseError::fail("Missing tx result"));
                     };
-                    let expected_error = "WrapperTx signature verification \
-                                          failed: The wrapper signature is \
-                                          invalid.";
-                    prop_assert_eq!(
-                        response.result.code,
-                        u32::from(ResultCode::InvalidSig)
-                    );
                     prop_assert!(
-                        response.result.info.contains(expected_error),
-                        "Result info {} doesn't contain the expected error {}",
-                        response.result.info,
-                        expected_error
+                        response.result.code
+                            == u32::from(ResultCode::InvalidTx)
+                            || response.result.code
+                                == u32::from(ResultCode::InvalidSig)
                     );
 
                     Ok(())
@@ -1092,9 +1096,10 @@ mod test_process_proposal {
         assert_eq!(response.result.code, u32::from(ResultCode::FeeError));
         assert!(response.result.info.contains(
             "Error trying to apply a transaction: Error while processing \
-             transaction's fees: The first transaction in the batch failed to \
-             pay fees via the MASP. Wasm run failed: Transaction runner \
-             error: Wasm validation error"
+             transaction's fees: The transparent balance of the fee payer was \
+             insufficient to pay fees. The protocol tried to run the first \
+             transaction in the batch to pay fees via the MASP but it failed: \
+             Wasm run failed: Transaction runner error: Wasm validation error"
         ));
     }
 

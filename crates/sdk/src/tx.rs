@@ -1486,28 +1486,34 @@ pub async fn build_redelegation(
     )
     .await?;
     let current_epoch = rpc::query_epoch(context.client()).await?;
-    let is_not_chained = if let Some(redel_end_epoch) = incoming_redel_epoch {
-        let last_contrib_epoch =
-            redel_end_epoch.prev().expect("End epoch must have a prev");
-        last_contrib_epoch.unchecked_add(params.slash_processing_epoch_offset())
-            <= current_epoch
-    } else {
-        true
-    };
-    if !is_not_chained {
+    let earliest_redeleg_epoch =
+        if let Some(redel_end_epoch) = incoming_redel_epoch {
+            let last_contrib_epoch =
+                redel_end_epoch.prev().expect("End epoch must have a prev");
+            let earliest_redeleg_epoch = last_contrib_epoch
+                .unchecked_add(params.slash_processing_epoch_offset());
+            (earliest_redeleg_epoch > current_epoch)
+                .then_some(earliest_redeleg_epoch)
+        } else {
+            None
+        };
+    if let Some(earliest_redeleg_epoch) = earliest_redeleg_epoch {
         edisplay_line!(
             context.io(),
             "The source validator {} has an incoming redelegation from the \
              delegator {} that may still be subject to future slashing. \
-             Redelegation is not allowed until this is no longer the case.",
+             Redelegation is not allowed until epoch {} when this is no \
+             longer the case.",
             &src_validator,
-            &owner
+            &owner,
+            earliest_redeleg_epoch
         );
         if !tx_args.force {
             return Err(Error::from(
                 TxSubmitError::IncomingRedelIsStillSlashable(
-                    src_validator.clone(),
                     owner.clone(),
+                    src_validator.clone(),
+                    earliest_redeleg_epoch,
                 ),
             ));
         }
@@ -3884,22 +3890,33 @@ pub async fn gen_ibc_shielding_transfer<N: Namada>(
     args: args::GenIbcShieldingTransfer,
 ) -> Result<Option<MaspTransaction>> {
     let source = IBC;
-    let (src_port_id, src_channel_id) =
-        get_ibc_src_port_channel(context, &args.port_id, &args.channel_id)
-            .await?;
-    let ibc_denom =
-        rpc::query_ibc_denom(context, &args.token, Some(&source)).await;
-    // Need to check the prefix
-    let token = namada_ibc::received_ibc_token(
-        &ibc_denom,
-        &src_port_id,
-        &src_channel_id,
-        &args.port_id,
-        &args.channel_id,
-    )
-    .map_err(|e| {
-        Error::Other(format!("Getting IBC Token failed: error {e}"))
-    })?;
+
+    let token = match args.asset {
+        args::IbcShieldingTransferAsset::Address(addr) => addr,
+        args::IbcShieldingTransferAsset::LookupNamadaAddress {
+            token,
+            port_id,
+            channel_id,
+        } => {
+            let (src_port_id, src_channel_id) =
+                get_ibc_src_port_channel(context, &port_id, &channel_id)
+                    .await?;
+            let ibc_denom =
+                rpc::query_ibc_denom(context, &token, Some(&source)).await;
+
+            namada_ibc::received_ibc_token(
+                &ibc_denom,
+                &src_port_id,
+                &src_channel_id,
+                &port_id,
+                &channel_id,
+            )
+            .map_err(|e| {
+                Error::Other(format!("Getting IBC Token failed: error {e}"))
+            })?
+        }
+    };
+
     let validated_amount =
         validate_amount(context, args.amount, &token, false).await?;
 
@@ -3936,7 +3953,7 @@ pub async fn gen_ibc_shielding_transfer<N: Namada>(
     Ok(shielded_transfer.map(|st| st.masp_tx))
 }
 
-async fn get_ibc_src_port_channel(
+pub(crate) async fn get_ibc_src_port_channel(
     context: &impl Namada,
     dest_port_id: &PortId,
     dest_channel_id: &ChannelId,
