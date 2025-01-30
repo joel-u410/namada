@@ -27,6 +27,7 @@ use namada_vp::native_vp::{Ctx, CtxPreStorageRead, NativeVp, VpEvaluator};
 use namada_vp::VpEnv;
 use thiserror::Error;
 
+use crate::context::middlewares::create_transfer_middlewares;
 use crate::core::host::types::identifiers::ChainId as IbcChainId;
 use crate::core::host::types::path::UPGRADED_IBC_STATE;
 use crate::event::IbcEvent;
@@ -36,8 +37,8 @@ use crate::storage::{
 };
 use crate::trace::calc_hash;
 use crate::{
-    Error as ActionError, IbcActions, NftTransferModule, TransferModule,
-    ValidationParams, COMMITMENT_PREFIX,
+    Error as ActionError, IbcActions, NftTransferModule, ValidationParams,
+    COMMITMENT_PREFIX,
 };
 
 #[allow(missing_docs)]
@@ -246,7 +247,10 @@ where
             ctx.clone(),
             verifiers.clone(),
         );
-        let module = TransferModule::new(ctx.clone(), verifiers);
+        let module = create_transfer_middlewares::<_, ParamsPseudo>(
+            ctx.clone(),
+            verifiers,
+        );
         actions.add_transfer_module(module);
         let module = NftTransferModule::<_, Token>::new(ctx.clone());
         actions.add_transfer_module(module);
@@ -301,7 +305,8 @@ where
             IbcActions::<_, Params, Token>::new(ctx.clone(), verifiers.clone());
         actions.set_validation_params(self.validation_params()?);
 
-        let module = TransferModule::new(ctx.clone(), verifiers);
+        let module =
+            create_transfer_middlewares::<_, Params>(ctx.clone(), verifiers);
         actions.add_transfer_module(module);
         let module = NftTransferModule::<_, Token>::new(ctx);
         actions.add_transfer_module(module);
@@ -558,7 +563,7 @@ mod tests {
     };
     use crate::core::router::types::event::ModuleEvent;
     use crate::event::IbcEventType;
-    use crate::parameters::IbcParameters;
+    use crate::parameters::{IbcParameters, IbcTokenRateLimits};
     use crate::primitives::proto::{Any, Protobuf};
     use crate::primitives::{Timestamp, ToProto};
     use crate::storage::{
@@ -611,6 +616,7 @@ mod tests {
 
     const ADDRESS: Address = Address::Internal(InternalAddress::Ibc);
     const TX_GAS_LIMIT: u64 = 10_000_000_000;
+    const GAS_SCALE: u64 = 1;
 
     fn get_client_id() -> ClientId {
         let id = format!("{}-0", MOCK_CLIENT_TYPE);
@@ -625,8 +631,10 @@ mod tests {
         let gov_params = GovernanceParameters::default();
         gov_params.init_storage(&mut state).unwrap();
         let ibc_params = IbcParameters {
-            default_mint_limit: Amount::native_whole(100),
-            default_per_epoch_throughput_limit: Amount::native_whole(100),
+            default_rate_limits: IbcTokenRateLimits {
+                mint_limit: Amount::native_whole(100),
+                throughput_per_epoch_limit: Amount::native_whole(100),
+            },
         };
         ibc_params.init_storage(&mut state).unwrap();
         namada_proof_of_stake::test_utils::test_init_genesis::<
@@ -1012,7 +1020,7 @@ mod tests {
         let mut tx_data = vec![];
         msg.to_any().encode(&mut tx_data).expect("encoding failed");
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1097,7 +1105,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1223,7 +1231,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1332,7 +1340,7 @@ mod tests {
             None,
         )));
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1426,7 +1434,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1547,7 +1555,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1657,7 +1665,7 @@ mod tests {
             None,
         )));
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1752,7 +1760,7 @@ mod tests {
             None,
         )));
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1875,7 +1883,7 @@ mod tests {
             None,
         )));
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -1997,7 +2005,7 @@ mod tests {
             None,
         )));
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -2104,7 +2112,7 @@ mod tests {
             None,
         )));
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -2206,7 +2214,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -2362,7 +2370,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -2573,7 +2581,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -2728,7 +2736,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -2886,7 +2894,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -3044,7 +3052,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -3222,7 +3230,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();
@@ -3456,7 +3464,7 @@ mod tests {
             .sign_wrapper(keypair_1());
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(TX_GAS_LIMIT),
+            &TxGasMeter::new(TX_GAS_LIMIT, GAS_SCALE),
         ));
         let (vp_wasm_cache, _vp_cache_dir) =
             wasm::compilation_cache::common::testing::vp_cache();

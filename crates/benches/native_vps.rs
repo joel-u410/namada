@@ -24,6 +24,7 @@ use namada_apps_lib::governance::pgf::storage::steward::StewardDetail;
 use namada_apps_lib::governance::storage::proposal::ProposalType;
 use namada_apps_lib::governance::storage::vote::ProposalVote;
 use namada_apps_lib::governance::{InitProposalData, VoteProposalData};
+use namada_apps_lib::ibc::context::middlewares::create_transfer_middlewares;
 use namada_apps_lib::ibc::core::channel::types::channel::Order;
 use namada_apps_lib::ibc::core::channel::types::msgs::MsgChannelOpenInit;
 use namada_apps_lib::ibc::core::channel::types::Version as ChannelVersion;
@@ -35,9 +36,7 @@ use namada_apps_lib::ibc::core::host::types::identifiers::{
     ClientId, ConnectionId, PortId,
 };
 use namada_apps_lib::ibc::primitives::ToProto;
-use namada_apps_lib::ibc::{
-    IbcActions, NftTransferModule, TransferModule, COMMITMENT_PREFIX,
-};
+use namada_apps_lib::ibc::{IbcActions, NftTransferModule, COMMITMENT_PREFIX};
 use namada_apps_lib::masp_primitives::merkle_tree::CommitmentTree;
 use namada_apps_lib::masp_primitives::transaction::Transaction;
 use namada_apps_lib::masp_proofs::sapling::SaplingVerificationContextInner;
@@ -219,7 +218,7 @@ fn governance(c: &mut Criterion) {
             .verifiers_and_changed_keys(&verifiers_from_tx);
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let ctx = Ctx::new(
             &Address::Internal(InternalAddress::Governance),
@@ -446,7 +445,7 @@ fn ibc(c: &mut Criterion) {
             .verifiers_and_changed_keys(&verifiers_from_tx);
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let shell_read = shielded_ctx.shell.read();
         let ibc = IbcVp::new(Ctx::new(
@@ -514,7 +513,7 @@ fn vp_multitoken(c: &mut Criterion) {
             .verifiers_and_changed_keys(&verifiers_from_tx);
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let ctx = Ctx::new(
             &Address::Internal(InternalAddress::Multitoken),
@@ -639,7 +638,7 @@ fn masp(c: &mut Criterion) {
                 .verifiers_and_changed_keys(&verifiers_from_tx);
 
             let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-                &TxGasMeter::new(u64::MAX),
+                &TxGasMeter::new(u64::MAX, 1),
             ));
             let ctx = Ctx::new(
                 &Address::Internal(InternalAddress::Masp),
@@ -1252,7 +1251,7 @@ fn pgf(c: &mut Criterion) {
             .verifiers_and_changed_keys(&verifiers_from_tx);
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let ctx = Ctx::new(
             &Address::Internal(InternalAddress::Pgf),
@@ -1328,8 +1327,9 @@ fn eth_bridge_nut(c: &mut Criterion) {
 
     let vp_address =
         Address::Internal(InternalAddress::Nut(native_erc20_addres));
-    let gas_meter =
-        RefCell::new(VpGasMeter::new_from_tx_meter(&TxGasMeter::new(u64::MAX)));
+    let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
+        &TxGasMeter::new(u64::MAX, 1),
+    ));
     let ctx = Ctx::new(
         &vp_address,
         &shell.state,
@@ -1400,8 +1400,9 @@ fn eth_bridge(c: &mut Criterion) {
         .verifiers_and_changed_keys(&verifiers_from_tx);
 
     let vp_address = Address::Internal(InternalAddress::EthBridge);
-    let gas_meter =
-        RefCell::new(VpGasMeter::new_from_tx_meter(&TxGasMeter::new(u64::MAX)));
+    let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
+        &TxGasMeter::new(u64::MAX, 1),
+    ));
     let ctx = Ctx::new(
         &vp_address,
         &shell.state,
@@ -1497,8 +1498,9 @@ fn eth_bridge_pool(c: &mut Criterion) {
         .verifiers_and_changed_keys(&verifiers_from_tx);
 
     let vp_address = Address::Internal(InternalAddress::EthBridgePool);
-    let gas_meter =
-        RefCell::new(VpGasMeter::new_from_tx_meter(&TxGasMeter::new(u64::MAX)));
+    let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
+        &TxGasMeter::new(u64::MAX, 1),
+    ));
     let ctx = Ctx::new(
         &vp_address,
         &shell.state,
@@ -1570,7 +1572,7 @@ fn parameters(c: &mut Criterion) {
 
         let vp_address = Address::Internal(InternalAddress::Parameters);
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let ctx = Ctx::new(
             &vp_address,
@@ -1646,7 +1648,7 @@ fn pos(c: &mut Criterion) {
 
         let vp_address = Address::Internal(InternalAddress::PoS);
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let ctx = Ctx::new(
             &vp_address,
@@ -1699,7 +1701,7 @@ fn ibc_vp_validate_action(c: &mut Criterion) {
             .verifiers_and_changed_keys(&verifiers_from_tx);
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let ibc = IbcVp::new(Ctx::new(
             &Address::Internal(InternalAddress::Ibc),
@@ -1725,7 +1727,10 @@ fn ibc_vp_validate_action(c: &mut Criterion) {
             );
         actions.set_validation_params(ibc.validation_params().unwrap());
 
-        let module = TransferModule::new(ctx.clone(), verifiers);
+        let module = create_transfer_middlewares::<_, parameters::Store<_>>(
+            ctx.clone(),
+            verifiers,
+        );
         actions.add_transfer_module(module);
         let module = NftTransferModule::<_, token::Store<()>>::new(ctx);
         actions.add_transfer_module(module);
@@ -1759,7 +1764,7 @@ fn ibc_vp_execute_action(c: &mut Criterion) {
             .verifiers_and_changed_keys(&verifiers_from_tx);
 
         let gas_meter = RefCell::new(VpGasMeter::new_from_tx_meter(
-            &TxGasMeter::new(u64::MAX),
+            &TxGasMeter::new(u64::MAX, 1),
         ));
         let ibc = IbcVp::new(Ctx::new(
             &Address::Internal(InternalAddress::Ibc),
@@ -1786,7 +1791,10 @@ fn ibc_vp_execute_action(c: &mut Criterion) {
             );
         actions.set_validation_params(ibc.validation_params().unwrap());
 
-        let module = TransferModule::new(ctx.clone(), verifiers);
+        let module = create_transfer_middlewares::<_, parameters::Store<_>>(
+            ctx.clone(),
+            verifiers,
+        );
         actions.add_transfer_module(module);
         let module = NftTransferModule::<_, token::Store<()>>::new(ctx);
         actions.add_transfer_module(module);
